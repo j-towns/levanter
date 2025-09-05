@@ -27,3 +27,7 @@ def gpt2_eval(input_ids):
     return out.array
 
 out = gpt2_eval(input_ids)
+
+body_fn, carry_init = scanagram.as_scan(gpt2_eval, input_ids)
+
+carry_1, out_0 = body_fn(carry_init, input_ids[0])

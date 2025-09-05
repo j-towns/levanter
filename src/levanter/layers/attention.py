@@ -7,6 +7,7 @@ from typing import Optional, Union, overload
 
 import equinox as eqx
 import jax
+from jax import lax
 import jax.numpy as jnp
 import jax.random as jrandom
 from jax.experimental.pallas.ops.tpu.splash_attention import SegmentIds
@@ -23,6 +24,8 @@ from haliax.nn.attention import causal_mask, combine_masks_and, combine_masks_or
 from haliax.nn.normalization import LayerNormBase
 from haliax.partitioning import pspec_for_axis
 from haliax.types import PrecisionLike
+
+from scanagram import custom_scanagram
 
 from .normalization import LayerNormConfigBase
 from .rotary import RotaryEmbeddings, RotaryEmbeddingsConfig
@@ -219,6 +222,32 @@ def dot_product_attention(
             logits_soft_cap=logits_soft_cap,
         )
 
+def _kv_cache_init(length, k_prefill, v_prefill):
+    prefill_length = k_prefill.axis_size("key_position")
+    return (
+        prefill_length,
+        hax.pad(k_prefill, {"key_position": (0, length - prefill_length)}),
+        hax.pad(v_prefill, {"key_position": (0, length - prefill_length)})
+    )
+
+def _kv_cache_update(cache, vals, axis):
+    t, k_cache, v_cache = cache
+    k_val, v_val = vals
+    assert k_val.axes == k_cache.axes
+    assert v_val.axes == v_cache.axes
+    kpos_idx = k_cache.axis_indices(axis)
+    vpos_idx = v_cache.axis_indices(axis)
+    k_cache = NamedArray(
+        lax.dynamic_update_index_in_dim(
+            k_cache.array, k_val.array, t, kpos_idx
+        ), k_cache.axes
+    )
+    v_cache = NamedArray(
+        lax.dynamic_update_index_in_dim(
+            v_cache.array, v_val.array, t, vpos_idx
+        ), v_cache.axes
+    )
+    return t + 1, k_cache, v_cache
 
 def simple_attention_with_dropout(
     QPos: Axis,
@@ -238,9 +267,7 @@ def simple_attention_with_dropout(
     scaling_factor: float | None = None,
     logits_soft_cap: Optional[float] = None,
 ):
-    QPos = query.resolve_axis(QPos)
-    KPos = key.resolve_axis(KPos)
-    m = materialize_mask(mask, QPos, KPos)
+    from IPython.terminal.debugger import set_trace; set_trace()
     orig_dtype = query.dtype
 
     if scaling_factor is None:
@@ -252,24 +279,114 @@ def simple_attention_with_dropout(
         query = query.astype(attention_dtype)
         key = key.astype(attention_dtype)
 
-    weights = haliax.dot(query, key, precision=precision, axis=Key)
+    @custom_scanagram
+    def attn(qkv):
+        query, key, value = qkv
 
-    if bias is not None:
-        weights = weights + bias
+        m = materialize_mask(
+            mask, query.resolve_axis(QPos), key.resolve_axis(KPos)
+        )
 
-    if logits_soft_cap is not None:
-        weights = hax.tanh(weights / logits_soft_cap) * logits_soft_cap
+        weights = haliax.dot(query, key, precision=precision, axis=Key)
 
-    if m is not None:
-        weights = haliax.where(m, weights, -1e9)
+        if bias is not None:
+            weights = weights + bias
 
-    weights = haliax.nn.softmax(weights, axis=KPos)
+        if logits_soft_cap is not None:
+            weights = hax.tanh(weights / logits_soft_cap) * logits_soft_cap
 
-    weights = weights.astype(orig_dtype)
+        if m is not None:
+            weights = haliax.where(m, weights, -1e9)
 
-    out = haliax.nn.dropout(weights, dropout, key=prng, inference=inference)
+        weights = haliax.nn.softmax(weights, axis=KPos)
 
-    return haliax.dot(out, value, axis=KPos)
+        weights = weights.astype(orig_dtype)
+
+        #out = haliax.nn.dropout(weights, dropout, key=prng, inference=inference)
+        out = weights
+
+        return haliax.dot(out, value, axis=KPos)
+
+    @attn.def_scanagram_with_prefill
+    def scan_rule(axis, qkv):
+        assert isinstance(mask, AttentionMask) and mask.is_causal
+        q, k, v = qkv
+        assert axis == q.axis_indices(QPos)
+        assert axis == k.axis_indices(KPos)
+        assert axis == v.axis_indices(KPos)
+
+        def init_fn(qkv_prefill):
+            q_prefill, k_prefill, v_prefill = qkv_prefill
+
+            prefill_len = q_prefill.array.shape[axis]
+            assert k_prefill.array.shape[axis] == prefill_len
+            assert v_prefill.array.shape[axis] == prefill_len
+
+            QPosFull = q_prefill.resolve_axis(QPos)
+
+            def correct_len(a, axis):
+                idx = a.axis_indices(axis)
+                return NamedArray(
+                    a.array,
+                    (*a.axes[:idx], a.axes[idx].resize(prefill_len),
+                     *a.axes[idx + 1:])
+                )
+            q_prefill = correct_len(q_prefill, QPos)
+            k_prefill = correct_len(k_prefill, KPos)
+            v_prefill = correct_len(v_prefill, KPos)
+            out_prefill = attn((q_prefill, k_prefill, v_prefill))
+            outpos_idx = out_prefill.axis_indices(QPos)
+            with hax.enable_shape_checks(False):
+                out_prefill = NamedArray(
+                    out_prefill.array,
+                    (*out_prefill.axes[:outpos_idx], QPosFull,
+                     *out_prefill.axes[outpos_idx + 1:])
+                )
+            kv_cache = _kv_cache_init(k.axis_size(KPos), k_prefill, v_prefill)
+            return kv_cache, out_prefill
+
+        def body_fn(kv_cache, qkv):
+            q, k, v = qkv
+            kv_cache_new = _kv_cache_update(kv_cache, (k, v), KPos)
+            t_new, k_cache_new, v_cache_new = kv_cache_new
+            QPosFull = q.resolve_axis(QPos)
+            KPosFull = k.resolve_axis(KPos)
+            def correct_axes(a, axis):
+                idx = a.axis_indices(axis)
+                return NamedArray(
+                    a.array,
+                    (*a.axes[:idx], *a.axes[idx + 1:])
+                )
+            q = correct_axes(q, QPos)
+
+            weights = hax.dot(q, k_cache_new, precision=precision, axis=Key)
+
+            if bias is not None:
+                weights = weights + bias
+
+            if logits_soft_cap is not None:
+                weights = hax.tanh(weights / logits_soft_cap) * logits_soft_cap
+
+            weights = hax.where(
+                hax.arange(KPosFull) < t_new, weights, -1e9
+            )
+
+            weights = haliax.nn.softmax(weights, axis=KPos)
+
+            weights = weights.astype(orig_dtype)
+
+            out = hax.dot(weights, v_cache_new, axis=KPos)
+            with hax.enable_shape_checks(False):
+                # Assuming that any batch axes are at the beginning.
+                out = NamedArray(
+                    out.array,
+                    (*out.axes[:-1], QPosFull, out.axes[-1])
+                )
+            return kv_cache_new, out
+
+        return 1, init_fn, body_fn
+
+    return attn((query, key, value))
 
 
 def _try_te_attention(
