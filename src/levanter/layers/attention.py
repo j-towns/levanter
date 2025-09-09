@@ -267,7 +267,6 @@ def simple_attention_with_dropout(
     scaling_factor: float | None = None,
     logits_soft_cap: Optional[float] = None,
 ):
-    from IPython.terminal.debugger import set_trace; set_trace()
     orig_dtype = query.dtype
 
     if scaling_factor is None:
