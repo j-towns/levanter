@@ -303,7 +303,7 @@ def simple_attention_with_dropout(
 
         out = haliax.nn.dropout(weights, dropout, key=prng, inference=inference)
 
-        return haliax.dot(out, value, axis=KPos)
+        return hax.rearrange(haliax.dot(out, value, axis=KPos), (QPos, ...))
 
     @attn.def_scanagram_with_prefill
     def scan_rule(axis, qkv):
@@ -375,16 +375,20 @@ def simple_attention_with_dropout(
 
             out = hax.dot(weights, v_cache_new, axis=KPos)
             with hax.enable_shape_checks(False):
-                # Assuming that any batch axes are at the beginning.
-                out = NamedArray(
-                    out.array,
-                    (*out.axes[:-1], QPosFull, out.axes[-1])
-                )
+                out = NamedArray(out.array, (QPosFull, *out.axes))
             return kv_cache_new, out
 
-        return 1, init_fn, body_fn
+        return 0, init_fn, body_fn
 
-    return attn((query, key, value))
+    # Scanagram currently requires all input and output arrays to a
+    # custom_scanagram-decorated function to have the scanned axis in the same
+    # position. For the avoidance of doubt, we move the scanned axes to
+    # position 0.
+    query_orig_axes = query.axes
+    query = hax.rearrange(query, (QPos, ...))
+    key = hax.rearrange(key, (KPos, ...))
+    value = hax.rearrange(value, (KPos, ...))
+    return hax.rearrange(attn((query, key, value)), query_orig_axes)
 
 
 def _try_te_attention(
@@ -1291,7 +1295,8 @@ class Attention(eqx.Module):
 
     @named_call
     def __call__(
-        self, x: NamedArray, mask: Optional[NamedArray | AttentionMask], *, key=None, pos_ids: NamedArray | None = None
+        self, x: NamedArray, mask: Optional[NamedArray | AttentionMask], *,
+        key=None, pos_ids: NamedArray | None = None, inference=False,
     ) -> NamedArray:
         key_q, key_k, key_v, key_o = maybe_rng_split(key, 4)
 
@@ -1339,7 +1344,7 @@ class Attention(eqx.Module):
             scaling_factor=self.config.scaling_factor,
             logits_soft_cap=self.config.logits_soft_cap,
             dropout=0.0,  # TODO: support dropout
-            inference=True,  # TODO: support training
+            inference=inference,  # TODO: support training
             prng=key,
         )
 
