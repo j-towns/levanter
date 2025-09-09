@@ -157,7 +157,6 @@ class Gpt2Attention(eqx.Module):
 
     c_attn: hnn.Linear  # input projection from [embed] -> [(q, k, v), heads, head_dim]
     c_proj: hnn.Linear  # output projection from [heads, head_dim] -> [embed]
-    inference: bool
 
     @staticmethod
     def init(config: Gpt2Config, *, key) -> "Gpt2Attention":
@@ -173,10 +172,12 @@ class Gpt2Attention(eqx.Module):
             In=(config.Heads, config.HeadSize), Out=Embed, key=k_proj, use_bias=use_bias, out_first=False
         )
 
-        return Gpt2Attention(config, c_attn, c_proj, inference=False)
+        return Gpt2Attention(config, c_attn, c_proj)
 
     @named_call
-    def __call__(self, x: NamedArray, mask: Optional[AttentionMask | NamedArray], layer_idx, *, key):
+    def __call__(self, x: NamedArray, mask: Optional[AttentionMask |
+                                                     NamedArray], layer_idx, *,
+                 key, inference=False):
         k_drop, k_attn, k_out = hax.jax_utils.maybe_rng_split(key, 3)
         qkv_out = self.c_attn(x, key=k_attn).rearrange((..., "qkv", "heads", "position", "head_size"))
         q, k, v = qkv_out.unbind("qkv")
@@ -197,7 +198,7 @@ class Gpt2Attention(eqx.Module):
             k,
             v,
             mask=mask,
-            inference=self.inference,
+            inference=inference,
             use_flash=self.config.use_flash_attention,
             attn_backend=self.config.attn_backend,
             flash_block_size=self.config.flash_attention_block_size,
@@ -231,10 +232,13 @@ class Gpt2Block(eqx.Module):
         return Gpt2Block(ln_1, attn, ln_2, mlp, resid_dropout)
 
     @named_call
-    def __call__(self, x: NamedArray, mask: Optional[AttentionMask | NamedArray], layer_idx, *, key):
+    def __call__(self, x: NamedArray, mask: Optional[AttentionMask |
+                                                     NamedArray], layer_idx, *,
+                 key, inference=False):
         k1, k2, k3, k4 = haliax.jax_utils.maybe_rng_split(key, 4)
 
-        attn_output = self.attn(self.ln_1(x), mask=mask, layer_idx=layer_idx, key=k1)
+        attn_output = self.attn(self.ln_1(x), mask=mask, layer_idx=layer_idx,
+                                key=k1, inference=inference)
         attn_output = self.resid_dropout(attn_output, key=k2)
         x = x + attn_output
 
@@ -262,9 +266,12 @@ class Gpt2Transformer(ModuleWithStateDictSerialization):
         return Gpt2Transformer(config, blocks, ln_f)
 
     @named_call
-    def __call__(self, x: NamedArray, attn_mask: Optional[AttentionMask | NamedArray], *, key=None) -> NamedArray:
+    def __call__(self, x: NamedArray, attn_mask: Optional[AttentionMask |
+                                                          NamedArray], *,
+                 key=None, inference=False) -> NamedArray:
         keys = hax.jax_utils.maybe_rng_split(key, self.config.num_layers) if key is not None else None
-        x = self.blocks.fold(x, attn_mask, hax.arange(self.config.Layers), key=keys)
+        x = self.blocks.fold(x, attn_mask, hax.arange(self.config.Layers),
+                             key=keys, inference=inference)
         x = self.ln_f(x)
 
         return x
@@ -346,12 +353,14 @@ class Gpt2LMHeadModel(LmWithHfSerializationMixin[Gpt2Config]):
         *,
         key=None,
         pos_ids: NamedArray | None = None,
+        inference: bool = False
     ) -> NamedArray:
         k_embed, k_transformer = haliax.jax_utils.maybe_rng_split(key, 2)
         if pos_ids is None:
             pos_ids = hax.arange(input_ids.resolve_axis("position"), dtype=jnp.int32)
         x = self.embeddings.embed(input_ids, pos_ids=pos_ids, key=k_embed)
-        x = self.transformer(x, attn_mask, key=k_transformer)
+        x = self.transformer(x, attn_mask, key=k_transformer,
+                             inference=inference)
 
         return x
 

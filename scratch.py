@@ -1,4 +1,6 @@
 from jax import random
+from jax import lax
+from jax.numpy import allclose
 import haliax as hax
 
 from levanter.models import gpt2
@@ -22,7 +24,7 @@ input_ids = random.randint(k_inputs, seq_length, 0, vocab_size)
 
 def gpt2_eval(input_ids):
     input_ids = hax.named(input_ids, (Pos,))
-    out = model(input_ids, attn_mask=causal_mask, key=k_eval)
+    out = model(input_ids, attn_mask=causal_mask, key=k_eval, inference=True)
     assert out.axes == (Pos, Vocab)
     return out.array
 
@@ -30,4 +32,13 @@ out = gpt2_eval(input_ids)
 
 body_fn, carry_init = scanagram.as_scan(gpt2_eval, input_ids)
 
-carry_1, out_0 = body_fn(carry_init, input_ids[0])
+_, out_scanagram = lax.scan(body_fn, carry_init, input_ids)
+assert allclose(out, out_scanagram)
+
+###############################################################################
+prompt_length = 512
+prompt = input_ids[:prompt_length]
+
+body_fn, carry_init, out_prefill = scanagram.as_scan_with_prefill(
+    gpt2_eval, input_ids, prompt
+)

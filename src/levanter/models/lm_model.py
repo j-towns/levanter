@@ -184,6 +184,7 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
         *,
         key=None,
         pos_ids: NamedArray | None = None,
+        inference=False,
     ) -> NamedArray:
         """
         Compute the logits for the next token in a sequence.
@@ -197,9 +198,11 @@ class LmHeadModel(eqx.Module, Generic[LmConfigT]):
 
         """
         try:
-            x = self.activations(input_ids, attn_mask, key=key, pos_ids=pos_ids)
+            x = self.activations(input_ids, attn_mask, key=key,
+                                 pos_ids=pos_ids, inference=inference)
         except TypeError:
-            # For backward compatibility with models that don't yet support pos_ids
+            # For backward compatibility with models that don't yet support
+            # pos_ids and/or inference
             x = self.activations(input_ids, attn_mask, key=key)
 
         lm_logits = hax.dot(x, self.get_lm_head(), axis=self.Embed)

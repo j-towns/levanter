@@ -301,8 +301,7 @@ def simple_attention_with_dropout(
 
         weights = weights.astype(orig_dtype)
 
-        #out = haliax.nn.dropout(weights, dropout, key=prng, inference=inference)
-        out = weights
+        out = haliax.nn.dropout(weights, dropout, key=prng, inference=inference)
 
         return haliax.dot(out, value, axis=KPos)
 
