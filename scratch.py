@@ -53,7 +53,7 @@ input_ids = random.randint(k_inputs, seq_length, 0, vocab_size)
 #
 #body_fn, carry_init = scanagram.as_scan(partial(llama_eval, model), input_ids)
 #_, out_scanagram = lax.scan(body_fn, carry_init, input_ids)
-#assert allclose(out, out_scanagram)
+#assert allclose(out, out_scanagram, rtol=1e-5, atol=1e-5)
 
 ############################### Gemma #########################################
 config = gemma.GemmaConfig(attn_backend=AttentionBackend.VANILLA)
