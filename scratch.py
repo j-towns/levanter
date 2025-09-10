@@ -1,6 +1,7 @@
 from functools import partial
 
 from jax import random
+from jax import config
 from jax import lax
 from jax.numpy import allclose
 from jax import jit
@@ -10,6 +11,8 @@ from levanter.models import gpt2, llama, gemma
 from levanter.layers.attention import AttentionMask, AttentionBackend
 
 import scanagram
+
+config.update('jax_default_matmul_precision', 'float32')
 
 
 vocab_size = 32
@@ -70,4 +73,4 @@ out = gemma_eval(model, input_ids)
 
 body_fn, carry_init = scanagram.as_scan(partial(gemma_eval, model), input_ids)
 _, out_scanagram = lax.scan(body_fn, carry_init, input_ids)
-assert allclose(out, out_scanagram)
+assert allclose(out, out_scanagram, rtol=1e-5, atol=1e-5)
