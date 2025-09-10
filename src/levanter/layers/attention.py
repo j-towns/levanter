@@ -393,6 +393,8 @@ def simple_attention_with_dropout(
     @attn.def_scanagram_with_prefill
     def scan_rule(axis, qkv):
         assert isinstance(mask, AttentionMask) and mask.is_causal
+        assert dropout == 0.
+
         q, k, v = qkv
         assert axis == q.axis_indices(QPos)
         assert axis == k.axis_indices(KPos)
