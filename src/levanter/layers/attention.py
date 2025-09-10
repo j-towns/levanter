@@ -465,10 +465,10 @@ def simple_attention_with_dropout(
 
         return 0, init_fn, body_fn
 
-    # Scanagram currently requires all input and output arrays to a
+    # Scanagram currently requires all input arrays to a
     # custom_scanagram-decorated function to have the scanned axis in the same
     # position. For the avoidance of doubt, we move the scanned axes to
-    # position 0.
+    # position 0. We also use 0 as the scanned axis for the output array.
     query_orig_axes = query.axes
     query = hax.rearrange(query, (QPos, ...))
     key = hax.rearrange(key, (KPos, ...))
