@@ -1295,8 +1295,7 @@ class Attention(eqx.Module):
 
     @named_call
     def __call__(
-        self, x: NamedArray, mask: Optional[NamedArray | AttentionMask], *,
-        key=None, pos_ids: NamedArray | None = None, inference=False,
+        self, x: NamedArray, mask: Optional[NamedArray | AttentionMask], *, key=None, pos_ids: NamedArray | None = None
     ) -> NamedArray:
         key_q, key_k, key_v, key_o = maybe_rng_split(key, 4)
 
@@ -1344,7 +1343,7 @@ class Attention(eqx.Module):
             scaling_factor=self.config.scaling_factor,
             logits_soft_cap=self.config.logits_soft_cap,
             dropout=0.0,  # TODO: support dropout
-            inference=inference,  # TODO: support training
+            inference=True,  # TODO: support training
             prng=key,
         )
 

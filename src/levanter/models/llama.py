@@ -300,15 +300,13 @@ class LlamaDecoderLayer(eqx.Module):
 
     @named_call
     def __call__(
-        self, x: NamedArray, mask: Optional[NamedArray | AttentionMask], *,
-        key=None, pos_ids: NamedArray | None = None, inference: bool = False,
+        self, x: NamedArray, mask: Optional[NamedArray | AttentionMask], *, key=None, pos_ids: NamedArray | None = None
     ) -> NamedArray:
         k_attn, k_mlp = maybe_rng_split(key, 2)
         # self attention and skip connection
         residual = x
         x = self.input_layernorm(x)
-        attn_output = self.self_attn(x=x, mask=mask, key=k_attn,
-                                     pos_ids=pos_ids, inference=inference)
+        attn_output = self.self_attn(x=x, mask=mask, key=k_attn, pos_ids=pos_ids)
         if self.post_attn_layernorm is not None:
             attn_output = self.post_attn_layernorm(attn_output)
         x = residual + attn_output
@@ -346,12 +344,10 @@ class LlamaTransformer(eqx.Module):
 
     @named_call
     def __call__(
-        self, x: NamedArray, attn_mask: Optional[NamedArray | AttentionMask],
-        *, key, pos_ids: NamedArray | None = None, inference: bool = False
+        self, x: NamedArray, attn_mask: Optional[NamedArray | AttentionMask], *, key, pos_ids: NamedArray | None = None
     ) -> NamedArray:
         keys = maybe_rng_split(key, self.config.num_layers) if key is not None else None
-        x = self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids,
-                             inference=inference)
+        x = self.layers.fold(x, mask=attn_mask, key=keys, pos_ids=pos_ids)
         x = self.norm(x)
 
         return x
@@ -436,7 +432,6 @@ class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig
         pos_ids: NamedArray | None = None,
         *,
         key=None,
-        inference: bool = False,
     ) -> NamedArray:
         """
         Args:
@@ -452,8 +447,7 @@ class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig
         """
         k_t, k_head = maybe_rng_split(key, 2)
         x = self.embeddings.embed(input_ids)
-        x = self.transformer(x, attn_mask=attn_mask, key=k_t, pos_ids=pos_ids,
-                             inference=inference)
+        x = self.transformer(x, attn_mask=attn_mask, key=k_t, pos_ids=pos_ids)
         if self.lm_head:
             lm_logits = self.lm_head(x, key=k_head)
         else:
@@ -467,7 +461,6 @@ class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig
         *,
         key=None,
         pos_ids: NamedArray | None = None,
-        inference: bool = False,
     ) -> NamedArray:
         """
         Compute the activations for the next token in a sequence.
@@ -482,8 +475,7 @@ class LlamaLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[LlamaConfig
 
         """
         x = self.embeddings.embed(input_ids)
-        x = self.transformer(x, attn_mask=attn_mask, key=key, pos_ids=pos_ids,
-                             inference=inference)
+        x = self.transformer(x, attn_mask=attn_mask, key=key, pos_ids=pos_ids)
 
         return x
 
